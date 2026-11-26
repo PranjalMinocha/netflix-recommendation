@@ -8,6 +8,8 @@ BASE_DIR = Path(__file__).resolve().parent
 CATALOG_FILE = BASE_DIR / "Netflix title catalog, November 2026.csv"
 EVENTS_FILE = BASE_DIR / "Netflix viewing events export, 17 Aug to 16 Nov 2026.csv"
 CUTOFF_DATE = date(2026, 11, 10)
+COMPLETION_THRESHOLD_PERCENT = 90
+OVERRUN_CAP_MULTIPLIER = 2
 BEFORE_FILE = BASE_DIR / "viewing_events_before_2026-11-10.csv"
 ON_OR_AFTER_FILE = BASE_DIR / "viewing_events_on_or_after_2026-11-10.csv"
 
@@ -86,6 +88,7 @@ def main():
     kept_before = []
     kept_on_or_after = []
     removal_counts = Counter()
+    adjustment_counts = Counter()
     removed_rows = 0
     unknown_runtime_rows = 0
 
@@ -98,10 +101,6 @@ def main():
         if title_id not in titles:
             reasons.append("title_id_not_in_catalog")
 
-        if not row["country"].strip():
-            reasons.append("missing_country")
-        if not row["device_type"].strip():
-            reasons.append("missing_device_type")
         if not watch_text:
             reasons.append("missing_watch_seconds")
 
@@ -118,10 +117,17 @@ def main():
             unknown_runtime_rows += 1
         elif runtime_minutes is not None and watch_seconds is not None:
             runtime_seconds = runtime_minutes * 60
-            if watch_seconds > runtime_seconds:
-                reasons.append("watch_seconds_exceeds_runtime")
-            if completed and watch_seconds < runtime_seconds:
-                reasons.append("completed_before_full_runtime")
+            if watch_seconds > runtime_seconds * OVERRUN_CAP_MULTIPLIER:
+                row["watch_seconds"] = str(runtime_seconds)
+                watch_seconds = runtime_seconds
+                adjustment_counts["watch_seconds_capped"] += 1
+            if (
+                completed
+                and watch_seconds * 100
+                < runtime_seconds * COMPLETION_THRESHOLD_PERCENT
+            ):
+                row["completed"] = "False"
+                adjustment_counts["completed_set_false_below_threshold"] += 1
 
         if reasons:
             removed_rows += 1
@@ -140,6 +146,9 @@ def main():
     print(f"Removed events (unique rows): {removed_rows}")
     for reason, count in sorted(removal_counts.items()):
         print(f"  {reason}: {count}")
+    print("Adjusted events:")
+    for adjustment, count in sorted(adjustment_counts.items()):
+        print(f"  {adjustment}: {count}")
     print(f"Events with missing catalog runtime (runtime checks skipped): {unknown_runtime_rows}")
     print(f"Before {CUTOFF_DATE}: {len(kept_before)} -> {BEFORE_FILE.name}")
     print(f"On/after {CUTOFF_DATE}: {len(kept_on_or_after)} -> {ON_OR_AFTER_FILE.name}")
